@@ -73,7 +73,7 @@ If you already have a mod called `git-graph`, rename this one's folder, and the
 
 Herdr's tab bar has Files and Changes buttons. [docs/top-bar.md](docs/top-bar.md)
 adds Graph beside them (your agent can do it in a minute), by cloning Herdr's
-`main` layout and `tabs` mod.
+`main` layout and `tabs` mod, and optionally ⌘G to open and close it.
 
 ### Or open it as a pane
 

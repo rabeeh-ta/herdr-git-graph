@@ -55,7 +55,46 @@ Then add the button right after the Changes one:
 { "id": "graph", "type": "block", "content": { "mod": "git-graph" } }
 ```
 
-## 4. Check
+## 4. A key for it (optional): ⌘G
+
+A key runs one command, and opening a panel takes two (select it, then show
+it). So give the tab bar a command per panel that does what its button does.
+In `mods/tabs-graph/main.js`, add `nextCommand` to the import from `"herdr"`,
+then make `init` listen for key commands and add `togglePanel` below it:
+
+```js
+  init(_props, cx) {
+    this.pressed = null;
+    this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
+    // Keys open a panel as its button does: "cmd-g": "tabs-graph.graph" in keys.json.
+    cx.spawn(async (cx) => { for (;;) { this.togglePanel(await nextCommand()); cx.notify(); } });
+  }
+
+  togglePanel(id) {
+    const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body");
+    if (!panel || !body?.children?.some((c) => c.id === id)) return;
+    if (!panel.hidden && body.active === id) run("layout.hide", { id: "panel" });
+    else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+  }
+```
+
+And the buttons use it too: in `panelButton`, the `on_click` that hides or
+shows the panel becomes `.on_click(() => this.togglePanel(id))`.
+
+Then bind the key in `keys.json`, in a section for this layout only (the
+person's other layouts don't have this tab bar):
+
+```json
+"layout:main-graph": { "cmd-g": "tabs-graph.graph" }
+```
+
+`tabs-graph.files` and `tabs-graph.changes` open those panels the same way.
+Each opens its panel, switches the open panel to it, or closes it when it's
+already showing. Ask before taking a key the person already uses, and avoid
+plain ctrl+letters: terminal programs use them (ctrl-g opens the editor in
+Claude Code).
+
+## 5. Check
 
 ```sh
 herdr-app check ~/.config/herdr-app/mods/tabs-graph
@@ -67,12 +106,13 @@ On Herdr 0.1.9 for macOS, `herdr-app check` crashes for every mod, Herdr's own
 included (a GPUI unwrap before the first frame). There, rely on
 `herdr-app status` and look at the window instead.
 
-Click **Graph** in the top bar. If the window doesn't show your edits, switch
+Click **Graph** in the top bar (or press ⌘G). If the window doesn't show your edits, switch
 layouts away and back (`ctrl-shift-l` twice): a copy that was reloaded while
 open can keep drawing its old frame.
 
 ## Going back
 
 `ctrl-shift-l` switches back to Herdr's `main`. Deleting `layouts/main-graph.json`
-and `mods/tabs-graph/` removes the clones; `mods/git-graph/` can stay for use as
-a pane.
+and `mods/tabs-graph/` removes the clones; if you added the key, remove the
+`layout:main-graph` section from `keys.json` too. `mods/git-graph/` can stay for
+use as a pane.
