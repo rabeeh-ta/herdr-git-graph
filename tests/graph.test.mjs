@@ -82,6 +82,19 @@ assert.equal(G.withUncommitted(commits, 0, tip.hash), commits);
 assert.deepEqual(G.parseStatus(" M a.txt\0?? b.txt\0D  c.txt\0UU d.txt\0"), [
   { path: "a.txt", status: "M", untracked: false }, { path: "b.txt", status: "A", untracked: true },
   { path: "c.txt", status: "D", untracked: false }, { path: "d.txt", status: "U", untracked: false }]);
+// The graph reads everything from the pane's folder at once: from a subfolder,
+// status still names paths from the root and the log is the whole history.
+{
+  const sub = join(repo, "deep", "er");
+  execFileSync("mkdir", ["-p", sub]);
+  writeFileSync(join(sub, "new.txt"), "x");
+  const fromRoot = git(repo, [...G.READ, ...G.STATUS]).stdout, fromSub = git(sub, [...G.READ, ...G.STATUS]).stdout;
+  assert.equal(fromSub, fromRoot);
+  assert.ok(G.parseStatus(fromSub).some((f) => f.path === "deep/er/new.txt"));
+  const args = G.logArgs({ all: true, remotes: true, limit: 300 });
+  assert.equal(git(sub, [...G.READ, ...args]).stdout, git(repo, [...G.READ, ...args]).stdout);
+  rmSync(join(repo, "deep"), { recursive: true });
+}
 console.log("uncommitted ok");
 
 

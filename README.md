@@ -35,7 +35,11 @@ extension).
   and changed files; click a file for its diff.
 - **Live.** It reloads when refs move (a commit, checkout or fetch from any
   terminal), refreshes the uncommitted row as you edit, and fetches with one
-  button. 300 commits at a time, with "Load 300 more".
+  button. 300 commits at first, and 300 more each time you scroll to the end.
+- **Fast to switch.** Every repository you've looked at is kept, and the ones open
+  in your other spaces are read ahead, so switching agents shows its graph at
+  once (then checks for changes in the background). Clicking a commit shows its
+  header at once; the files follow, and a commit you've opened before is instant.
 
 Everything that changes the repository asks first in a dialog, except checking
 out a local branch and the Fetch button. Destructive choices are red, and when
@@ -82,7 +86,11 @@ herdr-app do pane.split '{"direction":"right","mod":"git-graph","props":{"folder
 ## Limits
 
 - Tested on macOS with Herdr 0.1.9. Linux and Windows aren't tested yet.
-- The panel shows up to 300 commits per page; labels clip when a row has many.
+- Labels clip when a row has many.
+- A very large history loads slower the first time if the repository has no
+  commit-graph file (a fresh clone usually doesn't): openedx-platform, 78k
+  commits, takes about half a second. `git commit-graph write --reachable` (or
+  `git maintenance start`) in that repository brings it to about 60 ms.
 - Not in this version: Git Graph's find (Ctrl+F), a branch-picker dropdown, pull,
   interactive rebase, and per-file actions in commit details.
 

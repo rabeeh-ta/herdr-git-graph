@@ -20,9 +20,9 @@ Top to bottom:
   Beside it the current branch as a chip: 22px tall, radius 6, `accent` at 15%
   (`accent` + `26`) behind `accent` text, a 12px branch icon and the name at
   11.5px semibold; detached HEAD reads `detached at <8 chars>` with a commit icon.
-  On the right: the commit count (`16 commits`, or `300+ commits` while more can
-  be loaded) at 11px `dim`, then 24px icon buttons in `muted`: Fetch (arrow down,
-  only when the repo has remotes; it says `Fetching…` while running) and Refresh.
+  On the right, 24px icon buttons in `muted`: Fetch (arrow down, only when the
+  repo has remotes; it says `Fetching…` while running) and Refresh. No commit
+  count, as in Git Graph.
 - **Toolbar**, 34px, 10px side padding, bottom border: a segmented control
   `All branches | Current` (22px segments, 11.5px, the chosen one `raised` with a
   border) and a `Remotes` checkbox (13px box, `accent` filled with a check when
@@ -54,13 +54,18 @@ Top to bottom:
   - **Uncommitted changes (N)** as the first row whenever the working tree has
     changes: a gray ring, a dashed gray line (3 on, 3 off) down to HEAD's lane,
     `muted` text, `*` in the other columns.
-  - With more history, a last row `Load 300 more commits` in `accent`.
+  - With more history, a last row `Load 300 more commits` in `accent`. Scrolling
+    it into view loads the next 300, as Git Graph does (`Loading more commits…`
+    meanwhile); a click does the same.
 - **Details**, 320px under the list when a commit is selected, top border. A 32px
   bar with `Commit <8 chars>` (or `Uncommitted changes` and an `Open Changes`
-  link) and a `×`. Below, scrolling: the subject semibold, the body's lines in
-  `muted`, then label/value rows at 11.5px (64px `dim` labels): Commit (full hash,
-  monospace, `accent`), Parents, Author `name <email>`, Committer when different,
-  Date (`2026-10-28 12:09 · 2d`). Then `N files +a −d` and one 24px row per file:
+  link) and a `×`. Below, scrolling: the subject semibold, then label/value rows
+  at 11.5px (64px `dim` labels): Commit (full hash, monospace, `accent`),
+  Parents, Author `name <email>`, Date (`2026-10-28 12:09 · 2d`). These come from
+  the history already loaded, so they show the moment the commit is clicked, with
+  `Loading files…` under them; what git adds lands below without moving them:
+  Committer when different, the body's lines in `muted`, then `N files +a −d`
+  and one 24px row per file:
   the status letter (A `ansi2`, D/U `ansi1`, else `blocked`), the folder `dim`,
   the name, `+a` `ansi2`, `−d` `ansi1`. Clicking a file turns the area into its
   diff: a `← Files` back link and the path, then 20px monospace rows, hunk headers
@@ -89,15 +94,24 @@ or `ansi1` when the action or the chosen mode destroys something.
   Nothing animates.
 - **Which repository**: the focused pane's live folder (`panes()[i].cwd`), else
   `focused().cwd`, else the space's folder, on the space's machine. Opened with
-  `props.folder` (as a pane), always that folder, here. A new folder resets
-  everything (selection, page size, details) and loads at once; a slower load for
-  the previous folder drops its result.
-- **Loading**: `git rev-parse --show-toplevel`, then together `git log` (all refs
-  except `refs/stash` with All branches, or `HEAD` with Current; `--exclude=
-  refs/remotes/*` too when Remotes is off; `--date-order --decorate=full -n300`),
-  `rev-parse HEAD`, `symbolic-ref --short HEAD`, `for-each-ref refs/heads`,
-  `git remote`; then `git status --porcelain=v1 -z --no-renames
-  --untracked-files=all`. Reads pass `--no-optional-locks -c core.fsmonitor=false
+  `props.folder` (as a pane), always that folder, here. A new folder starts
+  clean (selection, page size, details) and loads at once; a slower load for the
+  previous folder drops its result.
+- **Switching fast**: leaving a folder keeps it as it was (the last 24 folders).
+  Coming back shows that in the same frame, then reads it again in the background
+  and redraws only if something changed (the log, HEAD, branches, remotes or the
+  uncommitted files). Like manygit, the folders open in other spaces' panes are
+  read ahead, one at a time, this machine's first: 1.5 s after start, then every
+  15 s for new ones. A commit's details are kept too (the last 200): clicking it
+  again shows them at once.
+- **Loading**: one round of git calls, all together, from the pane's folder (each
+  answers from a subfolder too, and status names paths from the repository
+  root): `git rev-parse --show-toplevel`, `git log` (all refs except `refs/stash`
+  with All branches, or `HEAD` with Current; `--exclude=refs/remotes/*` too when
+  Remotes is off; `--date-order --decorate=full -n301`: one past the page says
+  whether there are more, as Git Graph asks), `rev-parse HEAD`, `symbolic-ref
+  --short HEAD`, `for-each-ref refs/heads`, `git remote` and `git status
+  --porcelain=v1 -z --no-renames --untracked-files=all`. Reads pass `--no-optional-locks -c core.fsmonitor=false
   -c diff.autoRefreshIndex=false`, so they write nothing under `.git`.
 - **Staying live**: `watchFolder` on the repository root (and on the main
   checkout's `.git` for a linked worktree). A change to `HEAD`, `packed-refs` or
@@ -183,6 +197,13 @@ or `ansi1` when the action or the chosen mode destroys something.
   not an error. The uncommitted row needs HEAD's hash from `rev-parse`, since HEAD
   may be past the first 300 commits.
 - Paths from `watchFolder` use backslashes on Windows: normalize before matching.
+- `--date-order` walks the whole history unless the repository has a commit-graph
+  file (git writes one in `git gc` and `git maintenance`; a fresh clone has
+  none). On openedx-platform (78k commits, 6k refs) that's about 420 ms without
+  one and 60 ms with; the kept folders hide it after the first read. The order
+  can't be dropped: the lanes need children before parents.
+- State created during render throws (`VirtualListScrollHandle.new()` and the
+  like): make it in `init()`.
 - Herdr 0.1.9 on macOS: `herdr-app check` crashes for every mod; a copy reloaded
   in place may keep drawing its old frame until the layout is switched away and
   back. A hidden or fully covered window draws nothing, so `herdr-app shot` then

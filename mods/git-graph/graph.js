@@ -43,6 +43,42 @@ function stamp(seconds) {
 const tilde = (path, on) => (!on && path?.startsWith(home()) ? "~" + path.slice(home().length) : path);
 const brief = (c) => ({ hash: c.hash, subject: c.subject, parents: c.parents });
 const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const sameFiles = (a, b) => a.length === b.length && a.every((f, i) => f.path === b[i].path && f.status === b[i].status);
+const scopeOf = ({ all, remotes }) => `${all} ${remotes}`;
+// Folders kept as they were last read, and commits' details (a commit never changes).
+const SEEN = 24, DETAILS = 200;
+const keep = (map, key, value, max) => { map.delete(key); map.set(key, value); if (map.size > max) map.delete(map.keys().next().value); };
+
+// What belongs to one folder: a new folder starts from this, and leaving one keeps it.
+const folderState = () => ({
+  state: "loading", root: null, on: null, cwd: null, error: null,
+  base: [], commits: [], rows: [], lanes: 1, labels: new Map(), index: new Map(), hasMore: false, limit: PAGE, files: [], ctx: null,
+  head: null, current: null, branches: [], remoteNames: [], signature: null, scope: null, moreAsked: null,
+  selected: null, details: null, diff: null,
+});
+
+// Everything the table shows for a folder, in one round of git calls: each
+// answers from any subfolder, and status names paths from the repository root.
+async function readFolder(cwd, on, { all, remotes, limit }) {
+  const git = (args) => exec("git", [...READ, ...args], { cwd, on });
+  const [top, log, head, current, branches, remoteNames, status] = await Promise.all([
+    // One commit past the page says whether there are more, as Git Graph asks.
+    exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }), git(logArgs({ all, remotes, limit: limit + 1 })),
+    git(["rev-parse", "--verify", "-q", "HEAD"]), git(["symbolic-ref", "-q", "--short", "HEAD"]),
+    git(["for-each-ref", "--format=%(refname)", "refs/heads"]), git(["remote"]), git(STATUS)]);
+  if (top.code !== 0) return { state: "norepo", cwd, on };
+  // A log that fails without a HEAD is a repository with no commits yet.
+  if (log.code !== 0 && head.code === 0) throw new Error(log.stderr.trim());
+  const base = log.code === 0 ? parseLog(log.stdout) : [];
+  return {
+    root: top.stdout.trim(), on, cwd, base: base.slice(0, limit), limit, hasMore: base.length > limit,
+    head: head.code === 0 ? head.stdout.trim() : null, current: current.code === 0 ? current.stdout.trim() : null,
+    branches: branches.stdout.split("\n").filter(Boolean).map((r) => r.replace(/^refs\/heads\//, "")),
+    remoteNames: remoteNames.stdout.split("\n").filter(Boolean),
+    files: status.code === 0 ? parseStatus(status.stdout) : [],
+    signature: [log.stdout, head.stdout, current.stdout, branches.stdout, remoteNames.stdout].join("\0"), scope: scopeOf({ all, remotes }),
+  };
+}
 
 export class Graph {
   init(cx) {
@@ -52,30 +88,68 @@ export class Graph {
     this.diffId = `${this.listId}-diff`;
     this.all = true; this.remotes = true; this.wide = false; this.graphMax = 160; this.scale = null;
     this.watchToken = 0; this.seenChange = shared("git-graph.changed");
+    this.seen = new Map(); this.commitDetails = new Map();
     this.handle = cx.focus_handle();
     this.reset();
     this.refresh(cx);
-    // Remote spaces can't be watched: poll them gently.
-    cx.timer.every(15000, (cx) => { if (!this.watching) this.refresh(cx); });
+    cx.timer.after(1500, (cx) => this.warm(cx));
+    // Remote spaces can't be watched: poll them gently. New folders get read ahead.
+    cx.timer.every(15000, (cx) => { if (!this.watching) this.refresh(cx); this.warm(cx); });
   }
 
   key() { return JSON.stringify(location(this.folder)); }
 
-  // Everything that belongs to one repository; a new folder starts from here.
   reset() {
-    this.state = "loading"; this.root = null; this.on = null; this.cwd = null; this.error = null;
-    this.base = []; this.commits = []; this.rows = []; this.lanes = 1; this.labels = new Map(); this.index = new Map();
-    this.hasMore = false; this.limit = PAGE; this.files = []; this.ctx = null;
-    this.head = null; this.current = null; this.branches = []; this.remoteNames = [];
-    this.selected = null; this.details = null; this.diff = null;
+    Object.assign(this, folderState());
     this.watchToken++; this.watching = null;
+  }
+
+  // Leaving a folder keeps it as it was; coming back shows that at once, while refresh reads it again.
+  enter(context) {
+    if (this.context && ["ready", "empty", "norepo"].includes(this.state)) {
+      keep(this.seen, this.context, Object.fromEntries(Object.keys(folderState()).map((k) => [k, this[k]])), SEEN);
+    }
+    this.context = context; this.reset(); this.loading = null;
+    const kept = this.seen.get(context);
+    if (kept && (kept.state === "norepo" || kept.scope === scopeOf(this))) {
+      Object.assign(this, kept);
+      // A folder read ahead has its history but no table yet.
+      if (this.root && !this.commits.length) this.build();
+    }
+  }
+
+  // Like manygit: read the folders open in other spaces ahead, one at a time, so switching to one shows it at once.
+  warm(cx) {
+    if (this.folder || this.warming) return;
+    const machineOf = new Map(spaces().flatMap((s) => s.tabs.map((tab) => [tab.id, s.machine ?? null])));
+    const todo = new Map();
+    for (const p of panes()) {
+      if (!p.cwd) continue;
+      const where = { cwd: p.cwd, on: machineOf.get(p.tab) ?? null };
+      todo.set(JSON.stringify(where), where);
+    }
+    // Other machines answer slower, and may not answer at all: last.
+    const order = [...todo].filter(([key]) => key !== this.context && !this.seen.has(key)).sort(([, a], [, b]) => (a.on ? 1 : 0) - (b.on ? 1 : 0));
+    if (!order.length) return;
+    this.warming = true;
+    cx.spawn(async () => {
+      try {
+        for (const [key, { cwd, on }] of order) {
+          const scope = scopeOf(this);
+          const read = await readFolder(cwd, on, { all: this.all, remotes: this.remotes, limit: PAGE }).catch(() => null);
+          if (read && key !== this.context && !this.seen.has(key) && scope === scopeOf(this)) {
+            keep(this.seen, key, { ...folderState(), state: read.state ?? "ready", ...read }, SEEN);
+          }
+        }
+      } finally { this.warming = false; }
+    });
   }
 
   // A load belongs to its folder: a new folder starts at once, and a slower
   // load for the old one finds itself stale and drops its result.
   refresh(cx, full = true) {
     const { cwd, on } = location(this.folder), context = this.key();
-    if (context !== this.context) { this.context = context; this.reset(); this.loading = null; full = true; }
+    if (context !== this.context) { this.enter(context); full = true; }
     if (!cwd) { this.state = "nofolder"; return; }
     if (this.loading === context) { this.again = this.again === "full" || full ? "full" : "status"; return; }
     this.loading = context; this.again = null;
@@ -83,30 +157,21 @@ export class Graph {
     cx.spawn(async (cx) => {
       try {
         if (full || !this.root) {
-          const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
+          const read = await readFolder(cwd, on, { all, remotes, limit });
           if (stale()) return;
-          if (top.code !== 0) { this.reset(); this.state = "norepo"; this.cwd = cwd; this.on = on; return; }
-          const root = top.stdout.trim(), git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
-          const [log, head, current, branches, remoteNames] = await Promise.all([
-            git(logArgs({ all, remotes, limit })), git(["rev-parse", "--verify", "-q", "HEAD"]), git(["symbolic-ref", "-q", "--short", "HEAD"]),
-            git(["for-each-ref", "--format=%(refname)", "refs/heads"]), git(["remote"])]);
+          if (read.state === "norepo") { this.reset(); Object.assign(this, read); return; }
+          if (!on) this.watch(read.root, context, cx);
+          // A second look that finds nothing new leaves the table as it is.
+          const shown = this.state === "ready" || this.state === "empty";
+          if (shown && read.signature === this.signature && read.scope === this.scope && sameFiles(read.files, this.files)) return;
+          Object.assign(this, read);
+        } else {
+          const status = await exec("git", [...READ, ...STATUS], { cwd: this.root, on: this.on });
           if (stale()) return;
-          // A log that fails without a HEAD is a repository with no commits yet.
-          if (log.code !== 0 && head.code === 0) throw new Error(log.stderr.trim());
-          this.base = log.code === 0 ? parseLog(log.stdout) : [];
-          this.root = root; this.on = on; this.cwd = cwd;
-          this.head = head.code === 0 ? head.stdout.trim() : null;
-          this.current = current.code === 0 ? current.stdout.trim() : null;
-          this.branches = branches.stdout.split("\n").filter(Boolean).map((r) => r.replace(/^refs\/heads\//, ""));
-          this.remoteNames = remoteNames.stdout.split("\n").filter(Boolean);
-          this.hasMore = this.base.length >= limit;
-          if (!on) this.watch(root, git, context, cx);
+          const files = status.code === 0 ? parseStatus(status.stdout) : [];
+          if (sameFiles(files, this.files)) return;
+          this.files = files;
         }
-        const status = await exec("git", [...READ, ...STATUS], { cwd: this.root, on: this.on });
-        if (stale()) return;
-        const files = status.code === 0 ? parseStatus(status.stdout) : [];
-        if (!full && files.length === this.files.length && files.every((f, i) => f.path === this.files[i].path && f.status === this.files[i].status)) return;
-        this.files = files;
         this.build();
         if (this.selected === UNCOMMITTED && this.details) this.loadDetails(this.commits[0], cx);
       } catch (e) {
@@ -132,7 +197,7 @@ export class Graph {
   }
 
   // Ref moves reload the history; other edits only the uncommitted row, at most every 1.5 s.
-  watch(root, git, context, cx) {
+  watch(root, context, cx) {
     if (this.watching === root) return;
     this.watching = root;
     const token = this.watchToken;
@@ -150,7 +215,7 @@ export class Graph {
     loop(root, false);
     // A linked worktree keeps its refs in the main checkout's .git.
     cx.spawn(async (cx) => {
-      const common = (await git(["rev-parse", "--git-common-dir"])).stdout.trim();
+      const common = (await exec("git", [...READ, "rev-parse", "--git-common-dir"], { cwd: root })).stdout.trim();
       const dir = /^([a-zA-Z]:)?[\\/]/.test(common) ? common : `${root}/${common}`;
       if (token === this.watchToken && this.key() === context && !dir.startsWith(`${root}/`)) loop(dir, true);
     });
@@ -235,6 +300,8 @@ export class Graph {
 
   loadDetails(commit, cx) {
     const hash = commit.hash, git = (args) => exec("git", [...READ, ...args], { cwd: this.root, on: this.on });
+    const key = `${this.on}\0${this.root}\0${hash}`, known = !commit.uncommitted && this.commitDetails.get(key);
+    if (known) { this.details = known; return; }
     cx.spawn(async (cx) => {
       try {
         let details;
@@ -249,6 +316,7 @@ export class Graph {
           const [author, email, committer, committed, message] = body.stdout.split("\x1f");
           const files = joinFiles(status.stdout, numstat.stdout);
           details = { author, email, committer, committed: Number(committed), message: (message ?? "").trim(), files: files.slice(0, 500), more: Math.max(0, files.length - 500) };
+          keep(this.commitDetails, key, details, DETAILS);
         }
         if (this.selected === hash) this.details = details;
       } catch (e) { if (this.selected === hash) this.details = { error: String(e?.message ?? e) }; }
@@ -349,7 +417,6 @@ export class Graph {
       .when(ready && Boolean(where), (e) => e.child(h_flex().h(22).px(7).gap(5).min_w(0).items_center().rounded(6).bg(t.accent + "26").text_color(t.accent)
         .child(svg(icon(this.current ? "branch" : "commit")).size(12).flex_none()).child(div().min_w(0).truncate().text_size(11.5).font_semibold().child(where))))
       .child(div().flex_1())
-      .when(this.state === "ready", (e) => e.child(div().flex_none().text_size(11).text_color(t.dim).child(this.hasMore ? `${this.base.length}+ commits` : count(this.base.length, "commit"))))
       .when(ready && this.remoteNames?.length > 0, (e) => e.child(this.iconButton("graph-fetch", "fetch", this.fetching ? "Fetching…" : null, false, (_e, cx) => this.fetch(cx), t)))
       .when(this.state !== "nofolder", (e) => e.child(this.iconButton("graph-refresh", "refresh", null, false, (_e, cx) => this.refresh(cx), t)));
   }
@@ -382,10 +449,17 @@ export class Graph {
     return div().flex_1().min_h(0).relative()
       .on_mouse_down("left", (e) => { this.press = { x: (e.local_position?.x ?? 0) / this.unit(), count: e.click_count }; })
       .child(v_virtual_list(this.listId, count, ROW, (i) => this.commits[i]?.hash ?? "more",
-        (range) => Array.from({ length: range.end - range.start }, (_x, k) => range.start + k).map((i) => i < this.commits.length
-          ? this.row(i, t, colors, mono, width)
-          : div().id("graph-more").h(ROW).flex_none().px(14).flex().items_center().text_color(t.accent).hover((s) => s.bg(t.hover))
-            .child(this.loading ? "Loading…" : `Load ${PAGE} more commits`)))
+        (range, cx) => {
+          // Scrolling to the end loads the next page, as Git Graph does; the row also takes a click.
+          if (range.end > this.commits.length && this.hasMore && !this.loading && this.moreAsked !== this.limit) {
+            this.moreAsked = this.limit;
+            cx.spawn(async (cx) => this.loadMore(cx));
+          }
+          return Array.from({ length: range.end - range.start }, (_x, k) => range.start + k).map((i) => i < this.commits.length
+            ? this.row(i, t, colors, mono, width)
+            : div().id("graph-more").h(ROW).flex_none().px(14).flex().items_center().text_color(t.accent).hover((s) => s.bg(t.hover))
+              .child(this.loading ? "Loading more commits…" : `Load ${PAGE} more commits`));
+        })
         // Rows of a virtual list can't hold their own handlers: the list reports the row's key.
         .on_item_click((key, cx) => this.clicked(key, cx))
         .on_item_secondary_click((key, e, cx) => this.contextMenu(key, e, cx))
@@ -420,20 +494,21 @@ export class Graph {
           .on_click(() => showChanges()).child("Open Changes")))
         .child(close))
       .child(content);
-    if (!d) return pane(body.child(div().text_color(t.dim).child("Loading…")));
-    if (d.error) return pane(body.child(div().text_color(t.ansi1).child(d.error)));
+    if (d?.error) return pane(body.child(div().text_color(t.ansi1).child(d.error)));
     const meta = (k, v, color) => h_flex().gap(8).text_size(11.5).child(div().w(64).flex_none().text_color(t.dim).child(k)).child(div().min_w(0).truncate().text_color(color ?? t.muted).child(v));
+    // The history already has the header: it shows at once, and what git adds lands below it.
+    const head = commit.uncommitted ? body : body
+      .child(div().font_semibold().child(commit.subject))
+      .child(meta("Commit", commit.hash, t.accent).font_family(mono))
+      .child(meta("Parents", commit.parents.map((p) => p.slice(0, 8)).join(", ") || "none"))
+      .child(meta("Author", `${commit.author} <${commit.email}>`))
+      .child(meta("Date", `${stamp(commit.time)} · ${ago(commit.time)}`));
+    if (!d) return pane(head.child(div().pt(8).text_size(11.5).text_color(t.dim).child(commit.uncommitted ? "Loading…" : "Loading files…")));
     const add = d.files.reduce((n, f) => n + f.add, 0), del = d.files.reduce((n, f) => n + f.del, 0);
-    const lines = commit.uncommitted ? [] : d.message.split("\n").slice(1).join("\n").trim();
-    return pane(body
-      .when(!commit.uncommitted, (e) => e
-        .child(div().font_semibold().child(commit.subject))
-        .when(Boolean(lines), (el) => el.child(v_flex().pt(2).pb(4).children(lines.split("\n").map((line) => div().text_color(t.muted).child(line || " ")))))
-        .child(meta("Commit", commit.hash, t.accent).font_family(mono))
-        .child(meta("Parents", commit.parents.map((p) => p.slice(0, 8)).join(", ") || "none"))
-        .child(meta("Author", `${d.author} <${d.email}>`))
-        .when(Boolean(d.committer && d.committer !== d.author), (el) => el.child(meta("Committer", d.committer)))
-        .child(meta("Date", `${stamp(commit.time)} · ${ago(commit.time)}`)))
+    const lines = commit.uncommitted ? "" : d.message.split("\n").slice(1).join("\n").trim();
+    return pane(head
+      .when(Boolean(d.committer && d.committer !== d.author), (el) => el.child(meta("Committer", d.committer)))
+      .when(Boolean(lines), (el) => el.child(v_flex().pt(6).children(lines.split("\n").map((line) => div().text_color(t.muted).child(line || " ")))))
       .child(h_flex().pt(8).pb(2).gap(8).items_center().text_size(11.5)
         .child(div().text_color(t.muted).child(count(d.files.length + d.more, "file")))
         .when(add > 0 || del > 0, (e) => e.child(div().text_color(t.ansi2).child(`+${add}`)).child(div().text_color(t.ansi1).child(`−${del}`))))
