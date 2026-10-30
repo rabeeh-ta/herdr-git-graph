@@ -204,10 +204,10 @@ or `ansi1` when the action or the chosen mode destroys something.
   can't be dropped: the lanes need children before parents.
 - State created during render throws (`VirtualListScrollHandle.new()` and the
   like): make it in `init()`.
-- Herdr 0.1.9 on macOS: `herdr-app check` crashes for every mod; a copy reloaded
-  in place may keep drawing its old frame until the layout is switched away and
-  back. A hidden or fully covered window draws nothing, so `herdr-app shot` then
-  returns the last frame.
+- Herdr 0.1.9 on macOS: `herdr-app check` crashes for every mod (0.1.10 fixes
+  it); a copy reloaded in place may keep drawing its old frame until the layout
+  is switched away and back. A hidden or fully covered window draws nothing, so
+  `herdr-app shot` then returns the last frame.
 - The Show in Changes item assumes the main layout's `panel` / `panel-body` ids.
 - Untested: Linux, Windows, zoom other than 1, a remote machine's repository.
 

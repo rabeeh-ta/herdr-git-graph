@@ -25,8 +25,9 @@ herdr-app do layout.clone '{"name":"main","as":"main-graph"}'
 
 ## 2. Add the button: `mods/tabs-graph/main.js`
 
-Two edits. In Herdr 0.1.9 the lines read as below; in another version, find the
-same two places (the list of enabled panels, and the Changes button).
+Two edits. In Herdr 0.1.9 and 0.1.10 the lines read as below; in another
+version, find the same two places (the list of enabled panels, and the Changes
+button).
 
 The enabled panels decide which buttons show and which panel a space may
 reopen. Add `"graph"` to them:
@@ -104,7 +105,7 @@ herdr-app status          # "errors": [] and "layout": "main-graph"
 
 On Herdr 0.1.9 for macOS, `herdr-app check` crashes for every mod, Herdr's own
 included (a GPUI unwrap before the first frame). There, rely on
-`herdr-app status` and look at the window instead.
+`herdr-app status` and look at the window instead. 0.1.10 fixes it.
 
 Click **Graph** in the top bar (or press ⌘G). If the window doesn't show your edits, switch
 layouts away and back (`ctrl-shift-l` twice): a copy that was reloaded while
