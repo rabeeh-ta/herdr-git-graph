@@ -4,9 +4,11 @@ A commit graph for the [Herdr](https://herdr.dev) desktop app, in the spirit of
 VS Code's [Git Graph](https://github.com/mhutchie/vscode-git-graph) extension:
 every branch's history as colored lanes, branch and tag labels, and the git
 actions you'd want from them, one double-click or right-click away. It follows
-the repository of the terminal you're focused on.
+the repository of the terminal you're focused on. If the focused folder contains
+multiple repositories, choose one from the Graph header.
 
 ![Git Graph in Herdr](preview.png)
+![Multi Repo Git Graph in Herdr](multi-repo.png)
 
 Written from scratch as a native Herdr mod (no web view, no code from the VS Code
 extension).
@@ -48,10 +50,11 @@ git refuses, its own message stays in the dialog.
 ## What it runs
 
 The mod runs `git` in the focused repository (on its machine, for spaces on
-another machine) and reads files there to show an untracked file's contents. It
-reaches the network only through git, when you press Fetch, Push, or delete a
-remote branch. It never runs a shell: every git call is an argument list, and
-names you type can't start with `-`.
+another machine) and reads files there to show an untracked file's contents. If
+the focused folder isn't itself a repository, it searches below it for Git
+repositories. It reaches the network only through git, when you press Fetch,
+Push, or delete a remote branch. It never runs a shell: commands use argument
+lists, and names you type can't start with `-`.
 
 ## Install
 
