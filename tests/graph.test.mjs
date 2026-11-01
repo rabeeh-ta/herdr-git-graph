@@ -246,4 +246,6 @@ assert.equal(allEmpty.code, 0); assert.equal(G.parseLog(allEmpty.stdout).length,
 assert.ok(load({ all: true, remotes: false, limit: 300 }).every((c) => G.labelsOf(c, false).every((l) => l.kind !== "remote")));
 console.log("files ok");
 rmSync(base, { recursive: true, force: true });
+// Keep the original CI entry point running the action-context regressions too.
+await import("./action-context.test.mjs");
 console.log("all tests passed");
