@@ -70,7 +70,23 @@ export function parseRepoStatus(stdout) {
 // A background fetch, as manygit runs it: saved credentials and SSH's own
 // configuration still work, but nothing may stop to ask for a login. Git tries
 // askpass before GIT_TERMINAL_PROMPT, so an empty GIT_ASKPASS goes with it.
-export const FETCH = ["GCM_INTERACTIVE=0", "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "git", "fetch", "--quiet"];
+const QUIET = ["GCM_INTERACTIVE=0", "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS="];
+export const FETCH = [...QUIET, "git", "fetch", "--quiet"];
+// Pull all's command: fast-forward only, as a row's Pull, with prompts off.
+export const PULL = [...QUIET, "git", "pull", "--ff-only", "--quiet"];
+// How often the shown repositories fetch in the background, when the gear's
+// "Fetch in the background" is on (VS Code's git.autofetchPeriod: 180 s).
+export const AUTOFETCH = 3 * 60 * 1000;
+export const autofetchOn = (value) => value === true;
+// After a background fetch fails (or times out at Herdr's 30 s), that repository
+// waits twice as long before the next try, again for each failure, up to this.
+export const AUTOFETCH_MAX = 6 * 60 * 60 * 1000;
+export const autofetchWait = (failures = 0) => Math.min(AUTOFETCH * 2 ** failures, AUTOFETCH_MAX);
+// A repository's key in shared state, by machine and path. Plain text: Herdr cuts a shared key at a
+// NUL, so a NUL separator made every repository's key the same empty one.
+export const fetchKey = (path, on) => `${on ?? ""}:${path}`;
+// Whether a repository is due: its last try (0 when never) is older than its wait.
+export const autofetchDue = (lastAt = 0, failures = 0, now = Date.now()) => now - lastAt >= autofetchWait(failures);
 // Worth fetching: a repository that has a remote, or isn't read yet.
 export const fetchable = (st) => !st || st.error || Boolean(st.upstream || st.hasRemote);
 
@@ -97,9 +113,10 @@ export function webUrl(url) {
 export const LATEST_TAG = [...READ, "for-each-ref", "--count=1", "--sort=-creatordate", "--format=%(refname:short)", "refs/tags"];
 
 // What a row says of its upstream (manygit's states; drawn in Herdr's colors).
-export function syncOf(st, fetchError) {
+// failed: what the last Fetch all or Pull all did that failed ("fetch", "pull").
+export function syncOf(st, fetchError, failed = "fetch") {
   if (!st) return { kind: "loading", text: "…" };
-  if (fetchError) return { kind: "error", text: "fetch failed" };
+  if (fetchError) return { kind: "error", text: `${failed} failed` };
   if (st.error) return { kind: "error", text: "!" };
   // A detached HEAD has no branch to push: the branch column already says "detached".
   if (st.detached) return { kind: "ok", text: "" };
