@@ -83,6 +83,11 @@ export const LABEL = { CHAR: 6.6, PAD: 5, ICON: 13, GAP: 6, MAX: 22, FONT: 11 };
 const fit = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const partWidth = (part) => Math.ceil(LABEL.PAD * 2 + (part.icon ? LABEL.ICON : 0) + part.text.length * LABEL.CHAR) + 1;
 
+// A theme color with a two-digit alpha added (a tint of it). A translucent theme's colors
+// already carry one (#rrggbbaa): it is replaced, because appending to it makes a ten-digit
+// color Herdr can't parse, and a row drawn with one fails to draw, blanking the whole list.
+export const withAlpha = (color, alpha) => (/^#[0-9a-f]{8}$/i.test(color) ? color.slice(0, 7) : color) + alpha;
+
 export function labelsOf(commit, remotesShown = true) {
   const labels = [], remotes = remotesShown ? commit.refs.filter((r) => r.kind === "remote") : [], paired = new Set();
   for (const ref of commit.refs) {
