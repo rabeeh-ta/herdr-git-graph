@@ -49,6 +49,13 @@ Top to bottom:
   states Herdr has no mark for: `not pushed` in `ansi1` (a remote, but the
   branch has no upstream; nothing on a detached HEAD), `no remote` `dim`, `…` while loading. A click opens the repository's graph with everything above;
   "‹ Manygit" or `Esc` (with nothing else open) returns to the list.
+  **A repository with others inside** (found as below, under its top folder: a
+  workspace repo with its projects' own repositories, submodules) opens as the
+  first row of their list, named after its folder, with no heading of its own
+  beyond `./`: its graph shows with the back chevron and its name, so the
+  dropdown switches to the others; "‹ Manygit" shows the list (and keeps
+  showing it on later reads) until a row is opened. One with none inside
+  shows as before, "Git" and no chevron.
   **Right-click a row**: its remotes (`git config --get-regexp
   '^remote\..*\.url$'`) and the machine's agents (`knownAgents`, kept per
   machine and asked again after) are read, then a 268px menu opens at the
@@ -166,7 +173,8 @@ or `ansi1` when the action or the chosen mode destroys something.
 - **Which repository**: the focused pane's live folder (`panes()[i].cwd`), else
   `focused().cwd`, else the space's folder, on the space's machine. Opened with
   `props.folder` (as a pane), always that folder, here. If it's a repository,
-  use it; otherwise it's a Manygit folder when it holds repositories. A home
+  use it (as its list's first row when repositories sit under its top folder);
+  otherwise it's a Manygit folder when it holds repositories. A home
   folder and any folder above it aren't searched (too big, and on macOS walking
   home asks for Desktop, Documents and Downloads): this machine's `home()`, and
   for another machine, whose home isn't known, `/`, `/root`, `/home/<name>` and
@@ -182,7 +190,9 @@ or `ansi1` when the action or the chosen mode destroys something.
   filters a repository's own config defines): the uncommitted row comes with
   the read when the folder is shown. A commit's details are kept too (the last
   200): clicking it again shows them at once.
-- **Manygit loading**: one `find -H <folder> -mindepth 1 -maxdepth <depth+1>`
+- **Manygit loading**: for a repository, the walk below runs once under its
+  top folder per folder and depth (the 15 s re-reads keep that list; its own
+  `.git` is never one of the found). One `find -H <folder> -mindepth 1 -maxdepth <depth+1>`
   walk (on the space's machine too; `-H` follows the folder itself when it's a
   symlink, since macOS's find lists nothing under one, and no symlink below it)
   prints each `.git`

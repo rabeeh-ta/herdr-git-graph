@@ -342,6 +342,20 @@ rmSync(base, { recursive: true, force: true });
     assert.equal(R.unsearched(dir, home), skip, `unsearched ${dir}`);
   }
   assert.equal(R.depthOf(9), R.DEPTH.default); assert.equal(R.depthOf(2), 2); assert.equal(R.depthOf(undefined), 3);
+  // A repository with others inside (a workspace repo, a submodule's .git file): itself is
+  // never one of the found, and its list starts with it.
+  {
+    const outer = mkdtempSync(join(tmpdir(), "herdr-nested-"));
+    sh(outer, "init", "-q", "-b", "main"); mkdirSync(join(outer, "apps/web"), { recursive: true }); sh(join(outer, "apps/web"), "init", "-q", "-b", "main");
+    mkdirSync(join(outer, "sub")); writeFileSync(join(outer, "sub/.git"), "gitdir: ../.git/modules/sub\n");
+    const inside = R.parseFound(outer, spawnSync("find", R.findArgs(outer, 3), { encoding: "utf8" }).stdout);
+    assert.deepEqual(inside.map((r) => [r.group, r.name]), [["", "sub"], ["apps", "web"]], "repositories inside a repository, not itself");
+    const list = R.withRoot(outer + "/", inside);
+    assert.deepEqual([list[0].path, list[0].group, list[0].self], [outer, "", true], "the repository is its list's first row");
+    assert.equal(list[0].name, outer.split("/").pop());
+    assert.deepEqual(R.withRoot("/", []).map((r) => r.name), ["/"]);
+    rmSync(outer, { recursive: true, force: true });
+  }
   assert.deepEqual(R.parseFound("/w", "/w/x/.git\n/elsewhere/y/.git\nfind: /w/locked: Permission denied\n").map((r) => r.name), ["x"], "only paths under the folder");
 
   // A clone with a bare remote: ahead, behind, both, dirty, no upstream, no remote, detached.

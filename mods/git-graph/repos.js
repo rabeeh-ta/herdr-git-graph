@@ -43,6 +43,13 @@ export function parseFound(root, stdout, max = 500) {
   }).sort((a, b) => (a.group === b.group ? a.name.localeCompare(b.name) : a.group.localeCompare(b.group)));
 }
 
+// A repository with others inside it (a workspace repo, submodules): its list is
+// Manygit's with itself first, as the folder's own row.
+export function withRoot(root, repos) {
+  const path = root.replace(/(.)[/\\]+$/, "$1"), cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return [{ path, name: path.slice(cut + 1) || path, group: "", self: true }, ...repos];
+}
+
 // Everything a row shows, in one git call: manygit needs six to eight.
 export const REPO_STATUS = [...READ, "status", "--porcelain=v2", "--branch", "-z", "--no-renames", "--untracked-files=normal"];
 
