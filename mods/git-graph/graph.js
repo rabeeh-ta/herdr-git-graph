@@ -10,7 +10,7 @@ import { READ, STATUS, UNCOMMITTED, LABEL, logArgs, parseLog, parseStatus, withU
 import { perform, openDialog, showChanges } from "./act.js";
 import { icon } from "./menu.js";
 import { available, check, openUpdate, newer } from "./update.js";
-import { depthOf, unsearched, findArgs, parseFound, REPO_STATUS, LATEST_TAG, FETCH, REMOTES, fetchable, parseRepoStatus, parseRemotes, webUrl, syncOf } from "./repos.js";
+import { depthOf, unsearched, findArgs, parseFound, withRoot, REPO_STATUS, LATEST_TAG, FETCH, REMOTES, fetchable, parseRepoStatus, parseRemotes, webUrl, syncOf } from "./repos.js";
 
 // The frame the shown tab's panes are drawn in, so the panel beside them takes the
 // same corner radius; Herdr's own pane mod walks the same one (mods/pane/main.js).
@@ -85,9 +85,11 @@ const keep = (map, key, value, max) => { map.delete(key); map.set(key, value); i
 // What belongs to one folder: a new folder starts from this, and leaving one keeps it.
 // workspace: the repositories under a folder that isn't one (Manygit), their
 // statuses, and the one opened from that list (its graph shows until Back).
+// A repository with others inside opens as its own list's first row (self);
+// listing: Back was pressed there, so its list shows instead of its graph.
 const folderState = () => ({
   state: "loading", root: null, on: null, cwd: null, error: null,
-  workspace: null, statuses: new Map(), opened: null, skipped: false,
+  workspace: null, statuses: new Map(), opened: null, skipped: false, listing: false,
   base: [], commits: [], rows: [], lanes: 1, labels: new Map(), index: new Map(), hasMore: false, limit: PAGE, files: [], ctx: null,
   head: null, current: null, branches: [], remoteNames: [], signature: null, scope: null, moreAsked: null,
   selected: null, details: null, diff: null,
@@ -238,7 +240,13 @@ export class Graph {
             if (opened) { this.state = "error"; this.error = `${tilde(opened, on)} isn't a git repository any more.`; return; }
             await this.scan(cwd, on, stale, cx, timer); return;
           }
-          if (!opened) this.workspace = null;
+          if (!opened) {
+            // A repository with others inside: its graph, as the first row of their list.
+            const inside = await this.nestedIn(read.root, on);
+            if (stale()) return;
+            if (inside && this.listing) { await this.scan(read.root, on, stale, cx, timer, inside); return; }
+            this.workspace = inside; this.opened = inside ? read.root : null;
+          }
           if (!on) this.watch(read.root, context, cx);
           // A second look that finds nothing new leaves the table as it is.
           const shown = this.state === "ready" || this.state === "empty";
@@ -265,21 +273,38 @@ export class Graph {
   }
 
   // Manygit: find the repositories under cwd, then read each one's status.
-  async scan(cwd, on, stale, cx, timer) {
+  // known: the list nestedIn found when cwd is itself a repository.
+  async scan(cwd, on, stale, cx, timer, known = null) {
     const depth = depthSetting();
     if (timer && this.state === "norepo" && this.cwd === cwd) return;
-    if (unsearched(cwd, on ? null : home())) { this.reset(); Object.assign(this, { state: "norepo", cwd, on, skipped: true }); return; }
-    const found = await exec("find", findArgs(cwd, depth), { on }).catch(() => ({ stdout: "" }));
-    if (stale()) return;
-    const repos = parseFound(cwd, found.stdout);
+    let repos = known?.repos;
+    if (!repos) {
+      if (unsearched(cwd, on ? null : home())) { this.reset(); Object.assign(this, { state: "norepo", cwd, on, skipped: true }); return; }
+      const found = await exec("find", findArgs(cwd, depth), { on }).catch(() => ({ stdout: "" }));
+      if (stale()) return;
+      repos = parseFound(cwd, found.stdout);
+    }
     if (!repos.length) { this.reset(); Object.assign(this, { state: "norepo", cwd, on }); return; }
     // The same list keeps its rows' statuses while they're read again.
     const same = this.workspace?.root === cwd, statuses = same ? this.statuses : new Map();
     if (!same) this.reset();
-    this.workspace = { root: cwd, depth, repos }; this.statuses = statuses; this.cwd = cwd; this.on = on; this.state = "workspace";
+    this.workspace = { root: cwd, depth, repos, self: Boolean(known) }; this.statuses = statuses; this.cwd = cwd; this.on = on; this.state = "workspace";
+    this.listing = Boolean(known);
     if (!on) { this.watching = "workspace"; this.watchRepos(repos, cx); }
     cx.notify();
     await pool(repos, 8, (repo) => this.readStatus(repo.path, on, stale, cx));
+  }
+
+  // The repositories inside a repository (as Manygit finds them under a folder), with
+  // it first; null when there are none. Found once per folder and depth: a 15 s re-read
+  // keeps the list it has.
+  async nestedIn(root, on) {
+    const depth = depthSetting(), ws = this.workspace;
+    if (ws?.self && ws.root === root && ws.depth === depth) return ws;
+    if (unsearched(root, on ? null : home())) return null;
+    const found = await exec("find", findArgs(root, depth), { on }).catch(() => ({ stdout: "" }));
+    const repos = parseFound(root, found.stdout);
+    return repos.length ? { root, depth, repos: withRoot(root, repos), self: true } : null;
   }
 
   // on: the machine the list was read on, never whatever the panel shows by the time it runs.
@@ -366,7 +391,7 @@ export class Graph {
 
   back(cx) {
     const { workspace, statuses, cwd, on } = this;
-    this.reset(); Object.assign(this, { workspace, statuses, cwd, on, state: "workspace" });
+    this.reset(); Object.assign(this, { workspace, statuses, cwd, on, state: "workspace", listing: true });
     this.refresh(cx); cx.notify();
   }
 
