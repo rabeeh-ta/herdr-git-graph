@@ -422,3 +422,26 @@ export function diffRows(text) {
     return { kind: "", text: line };
   });
 }
+
+// Wraps diff rows at cols characters, so a narrow panel shows long lines (prose in
+// Markdown, say) whole instead of scrolling sideways. Every piece is its own fixed-height
+// row: the virtual list keeps one row size. A line breaks after its last space that
+// fits when there is one in the second half, else at cols; tabs count as 4 columns.
+// Continuation rows keep the kind (and so the +/- colour) but not the line number.
+// Hunk headers stay one row.
+export function wrapDiffRows(rows, cols) {
+  cols = Math.max(8, Math.floor(cols));
+  const out = [];
+  for (const row of rows) {
+    const text = row.text.includes("	") ? row.text.replace(/	/g, "    ") : row.text;
+    if (row.kind === "@" || text.length <= cols) { out.push(text === row.text ? row : { ...row, text }); continue; }
+    let rest = text, first = true;
+    while (rest.length > cols) {
+      const space = rest.lastIndexOf(" ", cols - 1), cut = space >= cols / 2 ? space + 1 : cols;
+      out.push({ ...row, number: first ? row.number : undefined, text: rest.slice(0, cut) });
+      rest = rest.slice(cut); first = false;
+    }
+    if (rest) out.push({ ...row, number: undefined, text: rest });
+  }
+  return out;
+}

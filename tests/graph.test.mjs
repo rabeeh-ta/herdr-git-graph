@@ -278,6 +278,23 @@ const rows = G.diffRows(git(repo, [...G.READ, ...G.diffArgs(mergeC, "f1.txt")]).
 assert.equal(rows[0].kind, "@"); assert.deepEqual(rows[1], { kind: "+", number: 1, text: "f1" });
 assert.ok(G.diffRows(git(repo, [...G.READ, ...G.diffArgs(root, "init.txt")]).stdout)[1].text === "init", "root commit diff");
 assert.equal(G.diffRows(""), null);
+
+// ---- wrapping diff rows to a narrow panel
+{
+  const prose = "The quick brown fox jumps over the lazy dog again and again";
+  const wrapped = G.wrapDiffRows([{ kind: "@", text: "@@ -1,2 +1,2 @@ a very long hunk header that stays whole" },
+    { kind: "+", number: 7, text: prose }, { kind: " ", number: 8, text: "short" }], 20);
+  assert.equal(wrapped[0].text, "@@ -1,2 +1,2 @@ a very long hunk header that stays whole", "hunk headers stay one row");
+  const pieces = wrapped.filter((r) => r.kind === "+");
+  assert.equal(pieces.map((r) => r.text).join(""), prose, "wrapping keeps every character");
+  assert.ok(pieces.every((r) => r.text.length <= 20), "no piece is wider than cols");
+  assert.deepEqual(pieces.map((r) => r.number), [7, ...pieces.slice(1).map(() => undefined)], "only the first piece keeps the number");
+  assert.ok(pieces.slice(0, -1).every((r) => r.text.endsWith(" ")), "prose breaks after a space");
+  assert.deepEqual(wrapped.at(-1), { kind: " ", number: 8, text: "short" }, "short rows pass through");
+  const word = G.wrapDiffRows([{ kind: "-", number: 1, text: "x".repeat(25) }], 10);
+  assert.deepEqual(word.map((r) => r.text.length), [10, 10, 5], "a line without spaces breaks at cols");
+  assert.equal(G.wrapDiffRows([{ kind: " ", number: 1, text: "	ab" }], 20)[0].text, "    ab", "tabs count as four columns");
+}
 // Empty repo and current-only scope.
 const empty = join(base, "empty"); sh(base, "init", "-q", empty);
 assert.notEqual(git(empty, G.logArgs({ all: false, remotes: true, limit: 300 })).code, 0, "HEAD scope fails without commits (handled as empty)");
