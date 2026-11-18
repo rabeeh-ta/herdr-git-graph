@@ -5,6 +5,7 @@ import { div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, focused, layout, exec, watchFolder, readTextFile, theme, settings, props, shared, setShared, openOverlay, home, notify, knownAgents, updates } from "herdr";
 import { layoutLanes } from "./lanes.js";
+import { DEFAULT_ORDER, normalizeOrder, normalizeVisibility, visibleOrder, columnBounds, moveColumn, targetColumn } from "./columns.js";
 import { READ, STATUS, UNCOMMITTED, LABEL, logArgs, parseLog, parseStatus, withUncommitted, labelsOf, hitLabel,
   menuFor, menuHeight, fileArgs, joinFiles, diffArgs, diffRows } from "./git.js";
 import { perform, openDialog, showChanges } from "./act.js";
@@ -147,7 +148,7 @@ export class Graph {
     this.diffId = `${this.listId}-diff`;
     this.all = true; this.remotes = true; this.wide = false; this.graphMax = 160; this.scale = null;
     this.watchToken = 0; this.seenChange = shared("git-graph.changed");
-    this.cols = withDefaults(); this.drag = null;
+    this.cols = withDefaults(); this.order = normalizeOrder(); this.visibility = normalizeVisibility(); this.drag = null;
     this.detail = Number(shared("git-graph.details")) || 0; this.seenDetail = this.detail;
     this.seen = new Map(); this.commitDetails = new Map();
     // Fetch all: its progress for one Manygit folder, and each repository's last failure.
@@ -430,7 +431,12 @@ export class Graph {
   }
 
   graphWidth() { return this.cols.graph ? this.clampColumn("graph", this.cols.graph) : Math.min(Math.max(GRAPH_MIN, PAD * 2 + this.lanes * LANE), this.graphMax); }
-  trailing() { return this.wide ? ["date", "author", "hash"] : ["date"]; }
+  visibleColumns() { return visibleOrder(this.order, this.wide, this.visibility); }
+  bounds() { return columnBounds(this.order, this.wide, Math.max(0, (this.width ?? 0) - 12), { ...this.cols, graph: this.graphWidth() }, LABEL.GAP, this.visibility); }
+  startReorder(key, e, cx) {
+    cx.stop_propagation();
+    this.drag = { axis: "reorder", key, x: e.position.x, order: this.order, bounds: this.bounds(), moved: false };
+  }
 
   clampColumn(key, w) {
     const { min, max = (this.width ?? Infinity) * 0.7 } = COLUMNS[key];
@@ -439,19 +445,27 @@ export class Graph {
 
   startDrag(key, e, cx) {
     cx.stop_propagation();
-    if (e.click_count < 2) { this.drag = { key, x: e.position.x, from: key === "graph" ? this.graphWidth() : this.cols[key] }; return; }
+    if (e.click_count < 2) { this.drag = { key, x: e.position.x, from: key === "graph" ? this.graphWidth() : this.cols[key], side: !this.visibleColumns().includes("description") || this.visibleColumns().indexOf(key) < this.visibleColumns().indexOf("description") ? 1 : -1 }; return; }
     if (this.cols[key] !== COLUMNS[key].width) { this.cols = { ...this.cols, [key]: COLUMNS[key].width }; this.saveColumns(); cx.notify(); }
   }
 
   moveDrag(e, cx) {
     const d = this.drag;
     if (!d) return;
+    if (d.axis === "reorder") {
+      const delta = (e.position.x - d.x) / this.unit();
+      if (Math.abs(delta) < 5 && !d.moved) return;
+      d.moved = true; d.delta = delta;
+      const target = targetColumn(d.bounds, d.key, delta);
+      this.order = moveColumn(d.order, this.wide, d.key, target, this.visibility);
+      cx.notify(); return;
+    }
     if (d.axis === "y") {
       const h = this.clampDetail(d.from - (e.position.y - d.y) / this.unit());
       if (h !== this.detail) { this.detail = h; d.moved = true; cx.notify(); }
       return;
     }
-    const w = this.clampColumn(d.key, d.from + COLUMNS[d.key].side * (e.position.x - d.x) / this.unit());
+    const w = this.clampColumn(d.key, d.from + d.side * (e.position.x - d.x) / this.unit());
     if (w !== this.cols[d.key]) { this.cols = { ...this.cols, [d.key]: w }; d.moved = true; cx.notify(); }
   }
 
@@ -459,11 +473,16 @@ export class Graph {
     const d = this.drag;
     if (!d) return;
     this.drag = null;
-    if (d.moved) { if (d.axis === "y") this.saveDetail(); else this.saveColumns(); }
+    if (d.moved) { if (d.axis === "y") this.saveDetail(); else if (d.axis === "reorder") setShared("git-graph.column-order", this.order); else this.saveColumns(); }
     cx.notify();
   }
 
   saveColumns() { this.seenCols = JSON.stringify(this.cols); setShared("git-graph.columns", this.cols); }
+
+  openColumnMenu(cx) {
+    openOverlay({ mod: "git-graph", kind: "popup", at: "pointer", width: 268, height: menuHeight(DEFAULT_ORDER.map(() => ({}))), props: { role: "columns" } });
+    cx.stop_propagation();
+  }
 
   // The details strip's height (it holds the diff too): a dragged height, else what the list leaves.
   clampDetail(h) {
@@ -484,9 +503,9 @@ export class Graph {
   }
   saveDetail() { this.seenDetail = this.detail; setShared("git-graph.details", this.detail); }
   // Where the description column ends: labels past it are clipped, so not clickable.
-  labelLimit() {
-    if (!this.width) return Infinity;
-    return this.width - 2 - 10 - this.trailing().reduce((n, k) => n + this.cols[k] + LABEL.GAP, 0);
+  labelBounds() {
+    const b = this.bounds().find((c) => c.key === "description");
+    return b ? { start: b.left - LABEL.GAP, limit: b.right } : { start: 0, limit: 0 };
   }
   // Pointer positions come in window units; layout sizes are these units times the zoom.
   unit() { return this.scale ?? settings().zoom ?? 1; }
@@ -508,7 +527,7 @@ export class Graph {
     const commit = this.commits[this.index.get(key)];
     if (!commit) return;
     if (press?.count >= 2) {
-      const hit = hitLabel(this.labels.get(key), press.x, this.graphWidth(), this.labelLimit());
+      const hit = hitLabel(this.labels.get(key), press.x, this.labelBounds().start, this.labelBounds().limit);
       if (hit) this.checkout(hit.part, cx);
       return;
     }
@@ -530,7 +549,7 @@ export class Graph {
     if (!commit || !this.ctx) return;
     if (e.bounds?.height) this.scale = e.bounds.height / this.rowH();
     const x = (e.local_position?.x ?? 0) / this.unit();
-    const hit = commit.uncommitted ? null : hitLabel(this.labels.get(key), x, this.graphWidth(), this.labelLimit());
+    const hit = commit.uncommitted ? null : hitLabel(this.labels.get(key), x, this.labelBounds().start, this.labelBounds().limit);
     const target = commit.uncommitted ? { kind: "uncommitted", commit: brief(commit), staged: this.files.some((f) => f.staged) }
       : hit && hit.part.kind !== "head" ? { kind: hit.part.kind, name: hit.part.name, commit: brief(commit) }
       : { kind: "commit", commit: brief(commit) };
@@ -638,17 +657,18 @@ export class Graph {
     const commit = this.commits[i], row = this.rows[i], color = colors[row.lane % colors.length];
     // Merge commits are muted, as Git Graph does by default.
     const fg = commit.uncommitted ? t.muted : commit.parents.length > 1 ? t.dim : t.foreground;
+    const cell = (key) => {
+      if (key === "graph") return this.graphCell(row, commit, colors, t, width);
+      if (key === "description") return h_flex().flex_1().min_w(0).h_full().gap(LABEL.GAP).items_center().overflow_hidden()
+        .children(this.labels.get(commit.hash).map((l) => this.label(l, color, t, mono)))
+        .child(div().flex_1().min_w(0).truncate().text_color(fg).when(commit.head, (e) => e.font_semibold()).child(commit.subject));
+      const text = commit.uncommitted ? "*" : key === "date" ? ago(commit.time) : key === "author" ? commit.author : commit.hash.slice(0, 8);
+      return div().w(this.cols[key]).flex_none().truncate().text_color(key === "author" ? t.muted : t.dim)
+        .when(key === "date", (e) => e.text_right()).when(key === "hash", (e) => e.font_family(mono).text_size(11)).child(text);
+    };
     return h_flex().id(`c-${commit.hash}`).w_full().h(this.rowH()).flex_none().pr(10).gap(LABEL.GAP).items_center().overflow_hidden()
       .when(commit.head, (e) => e.bg(color + "14")).when(this.selected === commit.hash, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
-      .child(this.graphCell(row, commit, colors, t, width))
-      // Labels and description clip together, so many labels never push the fixed columns out.
-      .child(h_flex().flex_1().min_w(0).h_full().gap(LABEL.GAP).items_center().overflow_hidden()
-        .children(this.labels.get(commit.hash).map((l) => this.label(l, color, t, mono)))
-        .child(div().flex_1().min_w(0).truncate().text_color(fg).when(commit.head, (e) => e.font_semibold()).child(commit.subject)))
-      .child(div().w(this.cols.date).flex_none().text_right().truncate().text_color(t.dim).child(commit.uncommitted ? "*" : ago(commit.time)))
-      .when(this.wide, (e) => e
-        .child(div().w(this.cols.author).flex_none().truncate().text_color(t.muted).child(commit.uncommitted ? "*" : commit.author))
-        .child(div().w(this.cols.hash).flex_none().font_family(mono).text_size(11).text_color(t.dim).child(commit.uncommitted ? "*" : commit.hash.slice(0, 8))));
+      .children(this.visibleColumns().map(cell));
   }
 
   iconButton(id, glyph, tip, active, action, t) {
@@ -781,16 +801,34 @@ export class Graph {
   }
 
   columns(t, width) {
-    const head = (text, w) => div().when(w !== undefined, (e) => e.w(w).flex_none()).truncate().child(text);
-    const titles = { date: "Date", author: "Author", hash: "Commit" };
-    // Handles stand in for the rows' gaps, 1px wider each side.
+    const titles = { graph: "Graph", description: "Description", date: "Date", author: "Author", hash: "Commit" };
+    const order = this.visibleColumns(), description = order.indexOf("description");
     const handle = (key) => div().id(`graph-col-${key}`).w(LABEL.GAP + 2).mx(-1).h_full().flex_none().flex().justify_center().cursor_col_resize()
       .on_mouse_down("left", (e, cx) => this.startDrag(key, e, cx))
-      .child(div().w(1).h_full().when(this.drag?.key === key, (e) => e.bg(t.accent)))
+      .child(div().w(1).h_full().when(this.drag?.key === key && this.drag?.axis !== "reorder", (e) => e.bg(t.accent)))
       .hover((s) => s.bg(t.border));
-    return h_flex().h(24).flex_none().pr(10).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
-      .child(head("Graph", width).pl(PAD)).child(handle("graph")).child(div().flex_1().min_w(0).child("Description"))
-      .children(this.trailing().flatMap((k) => [handle(k), head(titles[k], this.cols[k]).when(k === "date", (e) => e.text_right())]));
+    const head = (key) => div().id(`graph-heading-${key}`).h_full().min_w(0).truncate().cursor_grab()
+      .when(key === "description", (e) => e.flex_1())
+      .when(key !== "description", (e) => e.w(key === "graph" ? width : this.cols[key]).flex_none())
+      .when(key === "graph", (e) => e.pl(PAD)).when(key === "date", (e) => e.text_right())
+      .when(this.drag?.axis === "reorder" && this.drag.moved && this.drag.key === key, (e) => e.bg(t.selected).text_color(t.accent))
+      .on_mouse_down("left", (e, cx) => this.startReorder(key, e, cx)).child(titles[key]);
+    const children = [];
+    order.forEach((key, i) => {
+      if (i > 0) children.push(handle(description < 0 || i <= description ? order[i - 1] : key));
+      children.push(head(key));
+    });
+    const drag = this.drag?.axis === "reorder" && this.drag.moved ? this.drag : null;
+    const origin = drag?.bounds.find((b) => b.key === drag.key);
+    const destination = drag && this.bounds().find((b) => b.key === drag.key);
+    const ghostWidth = origin ? Math.min(140, Math.max(50, origin.right - origin.left)) : 0;
+    const ghostLeft = origin ? Math.max(0, Math.min((this.width ?? 0) - ghostWidth, origin.left + (origin.right - origin.left - ghostWidth) / 2 + drag.delta)) : 0;
+    return div().relative().h(24).flex_none().w_full()
+      .on_mouse_down("right", (_e, cx) => this.openColumnMenu(cx))
+      .child(h_flex().size_full().pr(10).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim).children(children))
+      .when(Boolean(destination), (e) => e.child(div().absolute().left(destination.left).bottom(0).w(Math.max(1, destination.right - destination.left)).h(2).bg(t.accent)))
+      .when(Boolean(drag && origin), (e) => e.child(div().absolute().left(ghostLeft).top(1).w(ghostWidth).h(22).px(6).rounded(4)
+        .border_1().border_color(t.accent).bg(t.raised).text_color(t.foreground).text_size(11).cursor_grabbing().truncate().child(titles[drag.key])));
   }
 
   list(t, mono) {
@@ -907,6 +945,10 @@ export class Graph {
     const changed = shared("git-graph.changed");
     const savedCols = shared("git-graph.columns"), seen = JSON.stringify(savedCols ?? null);
     if (!this.drag && seen !== this.seenCols) { this.seenCols = seen; this.cols = withDefaults(savedCols); }
+    const savedOrder = shared("git-graph.column-order"), orderSeen = JSON.stringify(savedOrder ?? null);
+    if (!this.drag && orderSeen !== this.seenOrder) { this.seenOrder = orderSeen; this.order = normalizeOrder(savedOrder); }
+    const savedVisibility = shared("git-graph.column-visibility"), visibilitySeen = JSON.stringify(savedVisibility ?? null);
+    if (!this.drag && visibilitySeen !== this.seenVisibility) { this.seenVisibility = visibilitySeen; this.visibility = normalizeVisibility(savedVisibility); }
     const savedDetail = Number(shared("git-graph.details")) || 0;
     if (!this.drag && savedDetail !== this.seenDetail) { this.seenDetail = savedDetail; this.detail = savedDetail; }
     const fetched = shared("git-graph.fetched");

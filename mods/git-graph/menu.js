@@ -2,8 +2,9 @@
 // { role: "menu", target, ctx }. Styled like Herdr's own menu.
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, closeOverlay, notify, theme, run } from "herdr";
+import { props, closeOverlay, notify, theme, run, shared, setShared } from "herdr";
 import { menuFor } from "./git.js";
+import { DEFAULT_ORDER, COLUMN_TITLES, normalizeVisibility } from "./columns.js";
 import { perform, openDialog, showChanges } from "./act.js";
 
 // A glyph of this mod, or another mod's icon by its path (Herdr's own Changes icon).
@@ -75,5 +76,52 @@ export class Menu {
           // An agent's own icon keeps its colors when it isn't drawn tinted.
           .child(it.image ? image(it.icon).size(14).flex_none() : svg(icon(it.icon)).size(14).flex_none().text_color(it.action.type.startsWith("delete") ? t.ansi1 : t.muted))
           .child(div().flex_1().min_w(0).truncate().child(this.busy === i ? "Working…" : it.label))));
+  }
+}
+
+
+export class ColumnMenu {
+  init(cx) {
+    this.handle = cx.focus_handle();
+    this.handle.focus();
+    this.at = -1;
+  }
+
+  enabled() {
+    return normalizeVisibility(shared("git-graph.column-visibility"));
+  }
+
+  toggle(key, cx) {
+    const enabled = this.enabled();
+    if (enabled.includes(key)) {
+      if (enabled.length === 1) {
+        notify({ title: "At least one column is required", level: "info", timeout: 2000 });
+        return;
+      }
+      setShared("git-graph.column-visibility", enabled.filter((item) => item !== key));
+    } else {
+      setShared("git-graph.column-visibility", [...enabled, key]);
+    }
+    cx.notify();
+  }
+
+  render(cx) {
+    const t = theme(), enabled = this.enabled();
+    return v_flex().id("git-graph-columns").track_focus(this.handle).w_full().min_h(0).p(5)
+      .bg(t.popover).text_size(12.8).text_color(t.foreground)
+      .on_key_down((e, cx) => {
+        if (e.key === "down") this.at = (this.at + 1) % DEFAULT_ORDER.length;
+        else if (e.key === "up") this.at = (this.at < 0 ? DEFAULT_ORDER.length : this.at) - 1;
+        else if ((e.key === "enter" || e.key === "space") && this.at >= 0) this.toggle(DEFAULT_ORDER[this.at], cx);
+        else if (e.key === "escape") closeOverlay(props().overlay);
+        else return;
+        cx.stop_propagation();
+        cx.notify();
+      })
+      .children(DEFAULT_ORDER.map((key, i) => h_flex().id(`gcm-${key}`).h(30).flex_none().px(8).gap(9).rounded(7).items_center()
+        .cursor_pointer().when(i === this.at, (el) => el.bg(t.selected)).hover((el) => el.bg(t.hover))
+        .on_click((_e, cx) => this.toggle(key, cx))
+        .child(div().size(14).flex_none().when(enabled.includes(key), (el) => el.child(svg(icon("check")).size(14).text_color(t.muted))))
+        .child(div().flex_1().min_w(0).truncate().child(COLUMN_TITLES[key]))));
   }
 }
