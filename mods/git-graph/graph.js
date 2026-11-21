@@ -6,7 +6,7 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, focused, layout, exec, watchFolder, readTextFile, theme, settings, props, shared, setShared, openOverlay, home, notify, knownAgents, updates } from "herdr";
 import { layoutLanes } from "./lanes.js";
 import { READ, STATUS, UNCOMMITTED, LABEL, logArgs, parseLog, parseStatus, withUncommitted, labelsOf, hitLabel,
-  menuFor, menuHeight, fileArgs, joinFiles, diffArgs, diffRows } from "./git.js";
+  menuFor, menuHeight, fileArgs, joinFiles, diffArgs, diffRows, wrapDiffRows } from "./git.js";
 import { perform, openDialog, showChanges } from "./act.js";
 import { icon } from "./menu.js";
 import { available, check, openUpdate, newer } from "./update.js";
@@ -34,7 +34,7 @@ function location(folder) {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
 }
 
-const PAGE = 300, ROW = 24, LANE = 12, PAD = 6, DIFF_ROW = 20;
+const PAGE = 300, ROW = 24, LANE = 12, PAD = 6, DIFF_ROW = 20, DIFF_CHAR = 6.6;
 // Herdr 0.1.12 zooms a list itself ("Lists in mods follow the zoom"): its row
 // heights and the lines painted in its rows are layout units there, where before
 // they were screen pixels. Asked once: the version doesn't change while running.
@@ -137,6 +137,7 @@ async function pool(items, limit, fn) {
 }
 const depthSetting = () => depthOf(shared("git-graph.depth"));
 const tagsShown = () => shared("git-graph.tags") === true;
+const wrapShown = () => shared("git-graph.wrap") === true;
 
 
 export class Graph {
@@ -589,7 +590,7 @@ export class Graph {
         }
       } catch (e) { rows = [{ kind: "", text: `Can't show this diff: ${e?.message ?? e}` }]; }
       if (this.selected === hash && this.diff?.path === file.path) {
-        this.diff = { path: file.path, rows, width: Math.max(300, ...rows.map((r) => r.text.length * 6.6 + 60)) };
+        this.diff = { path: file.path, rows, width: Math.max(300, ...rows.map((r) => r.text.length * DIFF_CHAR + 60)) };
       }
       cx.notify();
     });
@@ -692,7 +693,7 @@ export class Graph {
   }
 
   openSettings() {
-    openOverlay({ mod: "git-graph", kind: "popup", at: "pointer", width: 240, height: 92, props: { role: "settings" } });
+    openOverlay({ mod: "git-graph", kind: "popup", at: "pointer", width: 240, height: 130, props: { role: "settings" } });
   }
 
   // Manygit's repository pane: grouped by folder, each row its branch, uncommitted
@@ -827,16 +828,23 @@ export class Graph {
     const close = div().id("graph-details-close").px(6).py(1).rounded(4).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
       .on_click((_e, cx) => { this.selected = null; this.details = null; this.diff = null; cx.notify(); }).child("×");
     if (this.diff) {
-      const rows = this.diff.rows;
+      // Wrapped to the box's width when the setting is on (a monospace column is about
+      // DIFF_CHAR wide, as diff.width already assumes), worked out again only when the
+      // rows or the width change.
+      const wrap = wrapShown() && this.diff.rows ? Math.floor(((this.diffBox ?? 0) - 60) / DIFF_CHAR) : 0;
+      if (this.wrapped?.src !== this.diff.rows || this.wrapped?.cols !== wrap)
+        this.wrapped = { src: this.diff.rows, cols: wrap, rows: wrap > 0 ? wrapDiffRows(this.diff.rows, wrap) : this.diff.rows };
+      const rows = this.wrapped.rows;
       return v_flex().flex_none().h(this.detailHeight())
         .child(grip)
         .child(top.child(div().id("graph-diff-back").px(6).py(1).rounded(4).text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => { this.diff = null; cx.notify(); }).child("← Files"))
           .child(div().flex_1().min_w(0).truncate().font_family(mono).text_color(t.foreground).child(this.diff.path)).child(close))
         .child(div().flex_1().min_h(0).relative().font_family(mono).text_size(11)
+          .on_size_change((size, cx) => { if (Math.abs((this.diffBox ?? 0) - size.width) >= 1) { this.diffBox = size.width; cx.notify(); } })
           .when(!rows, (e) => e.child(div().p(12).text_color(t.dim).child("Loading diff…")))
           .when(Boolean(rows), (e) => e.child(div().id(`${this.diffId}-x`).size_full().overflow_x_scrollbar()
-              .child(div().w_full().min_w(this.diff.width).h_full().child(v_virtual_list(this.diffId, rows.length, DIFF_ROW, (i) => String(i),
+              .child(div().w_full().when(!wrap, (e) => e.min_w(this.diff.width)).h_full().child(v_virtual_list(this.diffId, rows.length, DIFF_ROW, (i) => String(i),
                 (range) => rows.slice(range.start, range.end).map((r) => this.diffRow(r, t))).size_full())))
             .child(Scrollbar.vertical(this.diffId).viewport_from_layout().absolute().inset_0())));
     }
