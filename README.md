@@ -29,7 +29,10 @@ extension).
   stash or reset its changes, open its remote's page, or copy its path. It searches 3 folders deep
   (1 to 5: the gear's Scan depth; Show tags there adds each one's newest tag), skipping hidden folders and `node_modules`-style
   ones, but not your home folder or anything above it (another machine's
-  `~` and `/` included).
+  `~` and `/` included). A repository with others inside it (a workspace repo
+  whose projects are their own repositories, or submodules) shows its own graph
+  as the first row of that list: the header's name drops the others down, and
+  **‹ Manygit** shows them all with it on top.
 - **Where you are.** The checked-out branch's label is filled with a ✓, the header
   shows the branch, and HEAD is a ring on a tinted row.
 - **Labels.** Local branches carry their remote (`main | origin`), remote-only
@@ -69,7 +72,8 @@ The mod runs `git` in the focused repository (on its machine, for spaces on
 another machine) and reads files there to show an untracked file's contents. If
 the focused folder isn't itself a repository, one `find` looks for repositories
 in it, and each one found gets a `git status` (again every 15 seconds while the
-list shows). Right-clicking one reads its remotes (`git config`) and asks Herdr
+list shows). For a repository, the same `find` runs once under its top folder
+to see whether it holds others. Right-clicking one reads its remotes (`git config`) and asks Herdr
 which agents are installed (Herdr asks that machine's shell, as its + menu
 does). Git reaches the network only when you press Fetch, Fetch all (each
 listed repository with a remote, with login prompts off, as manygit does), Pull,
