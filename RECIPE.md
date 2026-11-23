@@ -314,6 +314,11 @@ or `ansi1` when the action or the chosen mode destroys something.
 
 - `.when(cond, …)` needs a real boolean: `undefined` (a field a commit lacks) is
   taken for the function and throws "not a function".
+- A `theme()` color may already carry an alpha (`#rrggbbaa`, as a translucent
+  theme gives). Tint it with `withAlpha(color, "33")`, never `color + "33"`: that
+  makes a ten-digit color, the row that uses it fails to draw, and the whole commit
+  list stays empty. It shows only where such a row is on screen (the checked-out
+  branch's label with its remote, say), so it can look as if only some repositories fail.
 - Don't give a method and a state field the same name (`details`): resetting the
   field replaces the method.
 - `on_click` inside a virtual list's renderer throws; use the list's item handlers.

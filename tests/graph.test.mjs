@@ -71,6 +71,11 @@ assert.equal(G.hitLabel(labels, leftOf + 2, start, leftOf + 3).part.name, "main"
 // Long names are cut so the drawn width stays what was measured.
 const long = G.labelsOf({ refs: [{ kind: "branch", name: "a".repeat(60), head: false }] })[0];
 assert.equal(long.parts[0].text.length, G.LABEL.MAX);
+// A tint of a theme color: a translucent theme's #rrggbbaa gives up its own alpha, so the
+// result is always a valid eight-digit color (appending to it made ten digits, which failed to draw).
+assert.equal(G.withAlpha("#1a1a1e", "33"), "#1a1a1e33");
+assert.equal(G.withAlpha("#1a1a1e99", "33"), "#1a1a1e33");
+assert.equal(G.withAlpha("#60B9FCFF", "26"), "#60B9FC26");
 console.log("labels ok");
 
 // ---- uncommitted row and dashed lane
