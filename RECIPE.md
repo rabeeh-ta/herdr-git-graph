@@ -223,6 +223,11 @@ or `ansi1` when the action or the chosen mode destroys something.
   change refreshes only the uncommitted row, at most every 1.5 s. Remote spaces
   can't be watched: they reload every 15 s. After any action, `setShared(
   "git-graph.changed", now)` makes every copy reload.
+- **Reorder columns** by dragging a heading; highlight the dragged heading, show a pointer-following preview and accent destination indicator, and move the table cells with it. Save the order on release in shared `git-graph.column-order`, across graph copies and restarts. In a narrow panel, Author and Commit stay hidden without losing their positions. Label hit testing follows the Description column even when Graph moves elsewhere.
+- **Choose columns** by right-clicking a heading: a menu toggles each column,
+  keeping at least one visible. Save visibility in shared `git-graph.column-visibility`
+  across graph copies and restarts. Narrow panels hide Author and Commit unless
+  that would hide every selected column. Reordering and hit testing use visible columns.
 - **Drag** a column handle to resize it; Description takes what's left. A dragged
   Graph stops following its lanes (24px up to 70% of the width); Date 36–240px,
   Author 50–400px, Commit 40–200px. A double-click on a handle restores the column.

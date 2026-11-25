@@ -46,6 +46,7 @@ extension).
   - a commit: add tag, create branch, checkout, cherry pick, revert, merge, rebase, reset (soft, mixed, hard), copy hash, subject, or full commit message
   - uncommitted changes: commit (staging every change first, or only what's
     staged), stash, reset, show them in Herdr's Changes panel
+- **Columns.** Drag a column heading to reorder it; drag its edge to resize it. Right-click a heading to choose visible columns (at least one must remain visible). The order, widths and visibility are shared across graph copies and persist across restarts.
 - **Commit details.** Click a commit for its message, hash, parents, author, date
   and changed files; click a file for its diff. The top edge of the details
   drags to make it taller or shorter (double-click it for the automatic height),
